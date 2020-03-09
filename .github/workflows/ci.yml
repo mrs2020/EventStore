@@ -69,3 +69,50 @@ jobs:
         tag-latest: false
         additional-tags: ${{ env.VERSION }}
         registry: https://docker.pkg.github.com
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-18.04, windows-2019]
+        configuration: [Release]
+    runs-on: ${{ matrix.os }}
+    name: continuous-integration/github/build-${{ matrix.os }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Fetch Tags
+      run: |
+        git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+    - name: Install Dotnet
+      uses: actions/setup-dotnet@v1.4.0
+      with:
+        dotnet-version: '3.1.102'
+    - name: Calculate Version
+      shell: bash
+      run: |
+        dotnet tool restore
+        version=$(dotnet tool run minver -- --tag-prefix=oss-v)
+        echo "::set-env name=VERSION::${version}"
+    - name: Install Test CA Root Certificate (Linux)
+      if: ${{ !startsWith(matrix.os, 'windows') }}
+      run: |
+        sudo cp src/EventStore.Core.Tests/Services/Transport/Tcp/test_certificates/ca/ca.crt  /usr/local/share/ca-certificates/ca_eventstore_test.crt
+        sudo update-ca-certificates
+    - name: Install Test CA Root Certificate (Windows)
+      if: ${{ startsWith(matrix.os, 'windows') }}
+      run: |
+        certutil -addstore root src\EventStore.Core.Tests\Services\Transport\Tcp\test_certificates\ca\ca.crt
+    - name: Compile
+      shell: bash
+      run: |
+        dotnet build --configuration ${{ matrix.configuration }} src/EventStore.sln
+    - name: Run Tests
+      shell: bash
+      run: |
+        find ./src -maxdepth 1 -type d -name "*.Tests"  -print0 | xargs -I{} -0 -n1 bash -c 'dotnet test --configuration ${{ matrix.configuration }} --blame --settings ./ci/ci.runsettings --logger:html --logger:trx --logger:"console;verbosity=normal" --results-directory=$(pwd)/test-results/$1 $1' - '{}'
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v1
+      if: always()
+      with:
+        name: test-results-${{ matrix.configuration }}-${{ matrix.os }}
+        path: test-results
